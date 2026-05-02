@@ -52,6 +52,32 @@ export default function SignupPage() {
     const email = `${username.trim()}@studyhub.local`
     const { data, error } = await supabase.auth.signUp({ email, password })
 
+    // If auth user already exists (orphan from a previous failed signup),
+    // sign them in and try to create the missing profile
+    if (error?.message?.toLowerCase().includes('already registered')) {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+      if (signInError || !signInData.user) {
+        setServerError('An account with this username exists but your password is wrong. Try a different username.')
+        setLoading(false)
+        return
+      }
+      // Check if profile already exists (shouldn't, but just in case)
+      const { data: existingProfile } = await supabase.from('profiles').select('id').eq('id', signInData.user.id).maybeSingle()
+      if (existingProfile) {
+        router.push('/')
+        return
+      }
+      // Create the missing profile
+      await supabase.from('profiles').insert({
+        id: signInData.user.id,
+        display_name: displayName.trim(),
+        username: username.trim(),
+        avatar_color: species.key,
+      })
+      router.push('/')
+      return
+    }
+
     if (error || !data.user) {
       setServerError(error?.message ?? 'Signup failed')
       setLoading(false)
@@ -66,7 +92,7 @@ export default function SignupPage() {
     })
 
     if (profileError) {
-      setServerError('Failed to create profile')
+      setServerError(`Failed to create profile: ${profileError.message}`)
       setLoading(false)
       return
     }
@@ -103,7 +129,7 @@ export default function SignupPage() {
                   ? 'ring-2 ring-offset-1 scale-110 shadow-md'
                   : 'opacity-60 hover:opacity-90'
               }`}
-              style={species.key === a.key ? { ringColor: a.robe, background: `${a.robe}18` } : {}}
+              style={species.key === a.key ? { background: `${a.robe}18`, outline: `2px solid ${a.robe}` } : {}}
               aria-label={a.label}
             >
               {a.emoji}
