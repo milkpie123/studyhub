@@ -92,7 +92,8 @@ export default function SignupPage() {
     })
 
     if (profileError) {
-      setServerError(`Failed to create profile: ${profileError.message}`)
+      console.error('Profile creation failed:', profileError)
+      setServerError('Failed to create profile at this moment')
       setLoading(false)
       return
     }
