@@ -1,12 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import Seat, { type Profile } from './Seat'
 import CoffeeBreakArea from './CoffeeBreakArea'
 import MessagePopup from './MessagePopup'
 import MessageNotification from './MessageNotification'
-import ProfileModal from '@/components/profile/ProfileModal'
 
 interface SeatRow {
   id: number
@@ -57,23 +56,11 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
 
   const [messageTarget, setMessageTarget] = useState<{ id: string; display_name: string } | null>(null)
   const [notifications, setNotifications] = useState<Notification[]>([])
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [tasksDoneCount, setTasksDoneCount] = useState(0)
 
   const supabase = createClient()
   const ownSeatId = seats.find((s) => s.occupied_by === currentUser.id)?.id ?? null
   // Holds the subscribed broadcast channel so sendMessage can call .send() on it
   const dmChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
-
-  // Fetch tasks done count for profile modal (column is `checked`, not `done`)
-  const fetchTasksDone = useCallback(async () => {
-    const { count } = await supabase
-      .from('tasks')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', currentUser.id)
-      .eq('checked', true)
-    setTasksDoneCount(count ?? 0)
-  }, [supabase, currentUser.id])
 
   // Real-time: seats + profiles + messages
   useEffect(() => {
@@ -113,6 +100,7 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
           const updated = payload.new as { id: string; display_name: string; avatar_color: string; in_coffee_break: boolean }
           if (updated.id === currentUser.id) {
             setOwnInCoffeeBreak(updated.in_coffee_break)
+            setOwnProfile((prev) => ({ ...prev, display_name: updated.display_name, avatar_color: updated.avatar_color }))
             return
           }
           if (updated.in_coffee_break) {
@@ -211,20 +199,6 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
     setNotifications((prev) => prev.filter((n) => n.id !== id))
   }
 
-  async function handleProfileSave(updates: { display_name: string; avatar_color: string }) {
-    await supabase.from('profiles').update(updates).eq('id', currentUser.id)
-    setOwnProfile((prev) => ({ ...prev, ...updates }))
-    // Update own avatar in coffee break list if present
-    setCoffeeBreakUsers((prev) =>
-      prev.map((u) => u.id === currentUser.id ? { ...u, ...updates } : u)
-    )
-  }
-
-  function openProfile() {
-    fetchTasksDone()
-    setProfileOpen(true)
-  }
-
   return (
     <div className="relative">
       {/* Room — warm golden-green library, top-down view */}
@@ -232,15 +206,9 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
         className="relative rounded-3xl p-6 w-fit mx-auto shadow-xl"
         style={{ background: 'linear-gradient(160deg, #d8e8c2 0%, #c9d9a8 100%)', border: '3px solid #b5c98a' }}
       >
-        {/* Room label + own name clickable */}
-        <div className="text-center mb-4 flex items-center justify-center gap-2">
+        {/* Room label */}
+        <div className="text-center mb-4">
           <span className="text-xs font-bold tracking-widest uppercase text-[#7a9a50]/80">✨ Study Hall ✨</span>
-          <button
-            onClick={openProfile}
-            className="text-xs font-bold text-[#4a3728]/60 hover:text-[#4a3728] transition-colors underline-offset-2 hover:underline"
-          >
-            {ownProfile.display_name}
-          </button>
         </div>
 
         {/* Top row of seats */}
@@ -325,15 +293,6 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
         ))}
       </div>
 
-      {/* Profile modal */}
-      {profileOpen && (
-        <ProfileModal
-          profile={ownProfile}
-          tasksDoneCount={tasksDoneCount}
-          onClose={() => setProfileOpen(false)}
-          onSave={handleProfileSave}
-        />
-      )}
     </div>
   )
 }

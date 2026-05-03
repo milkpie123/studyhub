@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import StudyRoom from '@/components/room/StudyRoom'
 import TaskPanel from '@/components/tasks/TaskPanel'
+import ProfileCard from '@/components/profile/ProfileCard'
 
 export default async function RoomPage() {
   const supabase = await createServerSupabaseClient()
@@ -45,7 +46,6 @@ export default async function RoomPage() {
       >
         <span className="font-extrabold text-[#4a3728] text-lg">🧙 Studyhub</span>
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-[#7a6650]">{profile.display_name}</span>
           <form action="/api/logout" method="post">
             <button
               type="submit"
@@ -69,7 +69,8 @@ export default async function RoomPage() {
         </div>
 
         {/* Task panel */}
-        <aside className="w-72 shrink-0">
+        <aside className="w-72 shrink-0 flex flex-col gap-4">
+          <ProfileCard profile={profile} />
           <TaskPanel userId={user.id} />
         </aside>
       </main>
