@@ -11,7 +11,7 @@ export default async function RoomPage() {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, display_name, username, avatar_color')
+    .select('id, display_name, username, avatar_color, in_coffee_break, created_at')
     .eq('id', user.id)
     .single()
 
@@ -19,8 +19,13 @@ export default async function RoomPage() {
 
   const { data: rawSeats } = await supabase
     .from('seats')
-    .select('id, occupied_by, occupied_at, profiles(id, display_name, username, avatar_color)')
+    .select('id, occupied_by, occupied_at, profiles(id, display_name, username, avatar_color, in_coffee_break)')
     .order('id')
+
+  const { data: initialCoffeeBreakUsers } = await supabase
+    .from('profiles')
+    .select('id, display_name, avatar_color')
+    .eq('in_coffee_break', true)
 
   // Supabase returns joined tables as arrays; normalize to single profile or null
   const seats = (rawSeats ?? []).map((s) => ({
@@ -56,6 +61,7 @@ export default async function RoomPage() {
           <StudyRoom
             currentUser={profile}
             initialSeats={seats as Parameters<typeof StudyRoom>[0]['initialSeats']}
+            initialCoffeeBreakUsers={initialCoffeeBreakUsers ?? []}
           />
         </div>
 

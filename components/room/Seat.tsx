@@ -10,23 +10,22 @@ export interface Profile {
 interface SeatProps {
   seatId: number
   occupant: Profile | null
-  isFocused: boolean
   isOwnSeat: boolean
+  onClick: () => void
 }
 
-export default function Seat({ seatId, occupant, isFocused, isOwnSeat }: SeatProps) {
+export default function Seat({ seatId, occupant, isOwnSeat, onClick }: SeatProps) {
   return (
     <div
+      onClick={onClick}
       className={`
         w-16 h-20 rounded-2xl flex flex-col items-center justify-center gap-1
-        border-2 transition-all duration-150 cursor-default
-        ${isFocused
-          ? 'border-[#7BAE7F] shadow-lg shadow-[#7BAE7F]/30 scale-105 bg-[#f0f7f0]'
-          : isOwnSeat
-          ? 'border-[#7BAE7F]/60 bg-[#f5fbf5]'
+        border-2 transition-all duration-150
+        ${isOwnSeat
+          ? 'border-[#7BAE7F]/60 bg-[#f5fbf5] cursor-default'
           : occupant
-          ? 'border-[#d4c9b0] bg-[#fdf8ee]'
-          : 'border-[#e8dfc8] bg-[#faf5e9]/60 border-dashed'
+          ? 'border-[#d4c9b0] bg-[#fdf8ee] cursor-pointer hover:border-[#7BAE7F]/50'
+          : 'border-[#e8dfc8] bg-[#faf5e9]/60 border-dashed cursor-pointer hover:border-[#7BAE7F]/70 hover:bg-[#f0f7f0]'
         }
       `}
       aria-label={`Seat ${seatId}${occupant ? ` — ${occupant.display_name}` : ' — empty'}`}

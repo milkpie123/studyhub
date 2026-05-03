@@ -1,8 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import Seat, { type Profile } from './Seat'
+import CoffeeBreakArea from './CoffeeBreakArea'
+import MessagePopup from './MessagePopup'
+import MessageNotification from './MessageNotification'
+import ProfileModal from '@/components/profile/ProfileModal'
 
 interface SeatRow {
   id: number
@@ -11,62 +15,86 @@ interface SeatRow {
   profiles: Profile | null
 }
 
+interface RoomUser {
+  id: string
+  display_name: string
+  avatar_color: string
+}
+
+interface Notification {
+  id: string
+  senderName: string
+  text: string
+}
+
+interface CurrentUser {
+  id: string
+  display_name: string
+  username: string
+  avatar_color: string
+  in_coffee_break: boolean
+  created_at: string
+}
+
 interface StudyRoomProps {
-  currentUser: Profile
+  currentUser: CurrentUser
   initialSeats: SeatRow[]
+  initialCoffeeBreakUsers: RoomUser[]
 }
 
-// 8 seats arranged in a 4×2 grid (top row: 1-4, bottom row: 5-8)
-// Navigation adjacency map: seat index → { up, down, left, right } seat index (null = no neighbor)
-const ADJACENCY: Record<number, { up: number | null; down: number | null; left: number | null; right: number | null }> = {
-  0: { up: null, down: 4, left: null, right: 1 },
-  1: { up: null, down: 5, left: 0, right: 2 },
-  2: { up: null, down: 6, left: 1, right: 3 },
-  3: { up: null, down: 7, left: 2, right: null },
-  4: { up: 0, down: null, left: null, right: 5 },
-  5: { up: 1, down: null, left: 4, right: 6 },
-  6: { up: 2, down: null, left: 5, right: 7 },
-  7: { up: 3, down: null, left: 6, right: null },
-}
-
-const ARROW_TO_DIR: Record<string, keyof typeof ADJACENCY[0]> = {
-  ArrowUp: 'up',
-  ArrowDown: 'down',
-  ArrowLeft: 'left',
-  ArrowRight: 'right',
-}
-
-export default function StudyRoom({ currentUser, initialSeats }: StudyRoomProps) {
+export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBreakUsers }: StudyRoomProps) {
   const [seats, setSeats] = useState<SeatRow[]>(initialSeats)
-  const [focusedIndex, setFocusedIndex] = useState(0)
-  const supabase = createClient()
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [coffeeBreakUsers, setCoffeeBreakUsers] = useState<RoomUser[]>(
+    initialCoffeeBreakUsers.filter((u) => u.id !== currentUser.id)
+  )
+  const [ownInCoffeeBreak, setOwnInCoffeeBreak] = useState(currentUser.in_coffee_break)
+  const [ownProfile, setOwnProfile] = useState({
+    id: currentUser.id,
+    display_name: currentUser.display_name,
+    avatar_color: currentUser.avatar_color,
+    created_at: currentUser.created_at,
+  })
 
-  // Real-time subscription: merge seat-change events into local state
+  const [messageTarget, setMessageTarget] = useState<{ id: string; display_name: string } | null>(null)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [tasksDoneCount, setTasksDoneCount] = useState(0)
+
+  const supabase = createClient()
+  const ownSeatId = seats.find((s) => s.occupied_by === currentUser.id)?.id ?? null
+
+  // Fetch tasks done count for profile modal
+  const fetchTasksDone = useCallback(async () => {
+    const { count } = await supabase
+      .from('tasks')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', currentUser.id)
+      .eq('done', true)
+    setTasksDoneCount(count ?? 0)
+  }, [supabase, currentUser.id])
+
+  // Real-time: seats + profiles + messages
   useEffect(() => {
-    const channel = supabase
+    const seatsChannel = supabase
       .channel('seats-presence')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'seats' },
         async (payload) => {
-          const updatedSeat = payload.new as { id: number; occupied_by: string | null; occupied_at: string | null }
-
-          // Fetch profile for the occupant if any
+          const updated = payload.new as { id: number; occupied_by: string | null; occupied_at: string | null }
           let profile: Profile | null = null
-          if (updatedSeat.occupied_by) {
+          if (updated.occupied_by) {
             const { data } = await supabase
               .from('profiles')
-              .select('id, display_name, username, avatar_color')
-              .eq('id', updatedSeat.occupied_by)
+              .select('id, display_name, username, avatar_color, in_coffee_break')
+              .eq('id', updated.occupied_by)
               .single()
             profile = data
           }
-
           setSeats((prev) =>
             prev.map((s) =>
-              s.id === updatedSeat.id
-                ? { ...s, occupied_by: updatedSeat.occupied_by, occupied_at: updatedSeat.occupied_at, profiles: profile }
+              s.id === updated.id
+                ? { ...s, occupied_by: updated.occupied_by, occupied_at: updated.occupied_at, profiles: profile }
                 : s
             )
           )
@@ -74,76 +102,147 @@ export default function StudyRoom({ currentUser, initialSeats }: StudyRoomProps)
       )
       .subscribe()
 
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [supabase])
-
-  const handleKeyDown = useCallback(
-    async (e: KeyboardEvent) => {
-      const dir = ARROW_TO_DIR[e.key]
-      if (dir) {
-        e.preventDefault()
-        const next = ADJACENCY[focusedIndex][dir]
-        if (next !== null) setFocusedIndex(next)
-        return
-      }
-
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault()
-        const seat = seats[focusedIndex]
-        if (!seat) return
-
-        if (seat.occupied_by === currentUser.id) {
-          // Unclaim own seat
-          await supabase
-            .from('seats')
-            .update({ occupied_by: null, occupied_at: null })
-            .eq('id', seat.id)
-        } else if (!seat.occupied_by) {
-          // Clear any previous claim, then claim this seat
-          await supabase
-            .from('seats')
-            .update({ occupied_by: null, occupied_at: null })
-            .eq('occupied_by', currentUser.id)
-
-          await supabase
-            .from('seats')
-            .update({ occupied_by: currentUser.id, occupied_at: new Date().toISOString() })
-            .eq('id', seat.id)
+    const profilesChannel = supabase
+      .channel('profiles-presence')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles' },
+        (payload) => {
+          const updated = payload.new as { id: string; display_name: string; avatar_color: string; in_coffee_break: boolean }
+          if (updated.id === currentUser.id) {
+            setOwnInCoffeeBreak(updated.in_coffee_break)
+            return
+          }
+          if (updated.in_coffee_break) {
+            setCoffeeBreakUsers((prev) =>
+              prev.some((u) => u.id === updated.id)
+                ? prev.map((u) => u.id === updated.id ? { ...u, display_name: updated.display_name, avatar_color: updated.avatar_color } : u)
+                : [...prev, { id: updated.id, display_name: updated.display_name, avatar_color: updated.avatar_color }]
+            )
+          } else {
+            setCoffeeBreakUsers((prev) => prev.filter((u) => u.id !== updated.id))
+          }
         }
-        // If occupied by another user — do nothing (satisfies cannot claim requirement)
-      }
-    },
-    [focusedIndex, seats, currentUser.id, supabase]
-  )
+      )
+      .subscribe()
 
-  useEffect(() => {
-    const el = containerRef.current
-    el?.focus()
-    el?.addEventListener('keydown', handleKeyDown)
-    return () => el?.removeEventListener('keydown', handleKeyDown)
-  }, [handleKeyDown])
+    const messagesChannel = supabase
+      .channel('messages-inbox')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `recipient_id=eq.${currentUser.id}` },
+        async (payload) => {
+          const msg = payload.new as { id: string; sender_id: string; text: string }
+          // Look up sender name from local state first, fallback to fetch
+          const inSeat = seats.find((s) => s.occupied_by === msg.sender_id)?.profiles
+          const inCoffeeBreak = coffeeBreakUsers.find((u) => u.id === msg.sender_id)
+          let senderName: string = inSeat?.display_name ?? inCoffeeBreak?.display_name ?? ''
+          if (!senderName) {
+            const { data } = await supabase.from('profiles').select('display_name').eq('id', msg.sender_id).single()
+            senderName = data?.display_name ?? 'Someone'
+          }
+          setNotifications((prev) => {
+            const newNotif = { id: msg.id, senderName, text: msg.text }
+            const updated = [newNotif, ...prev]
+            return updated.slice(0, 3)
+          })
+        }
+      )
+      .subscribe()
 
-  const ownSeatId = seats.find((s) => s.occupied_by === currentUser.id)?.id ?? null
+    return () => {
+      supabase.removeChannel(seatsChannel)
+      supabase.removeChannel(profilesChannel)
+      supabase.removeChannel(messagesChannel)
+    }
+  }, [supabase, currentUser.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Claim a seat
+  async function claimSeat(seatId: number) {
+    // Optimistically release coffee break
+    setOwnInCoffeeBreak(false)
+    await supabase.from('profiles').update({ in_coffee_break: false }).eq('id', currentUser.id)
+    await supabase.from('seats').upsert({ id: seatId, occupied_by: currentUser.id, occupied_at: new Date().toISOString() })
+  }
+
+  // Move to coffee break
+  async function goToCoffeeBreak() {
+    if (ownSeatId !== null) {
+      await supabase.from('seats').update({ occupied_by: null, occupied_at: null }).eq('id', ownSeatId)
+    }
+    await supabase.from('profiles').update({ in_coffee_break: true }).eq('id', currentUser.id)
+    setOwnInCoffeeBreak(true)
+    setCoffeeBreakUsers((prev) =>
+      prev.some((u) => u.id === currentUser.id)
+        ? prev
+        : [...prev, { id: currentUser.id, display_name: ownProfile.display_name, avatar_color: ownProfile.avatar_color }]
+    )
+  }
+
+  function handleSeatClick(seat: SeatRow) {
+    if (!seat.occupied_by) {
+      claimSeat(seat.id)
+    } else if (seat.occupied_by !== currentUser.id && seat.profiles) {
+      setMessageTarget({ id: seat.occupied_by, display_name: seat.profiles.display_name })
+    }
+    // own seat: no-op
+  }
+
+  async function sendMessage(text: string) {
+    if (!messageTarget) return
+    await supabase.from('messages').insert({
+      sender_id: currentUser.id,
+      recipient_id: messageTarget.id,
+      text,
+    })
+  }
+
+  function dismissNotification(id: string) {
+    setNotifications((prev) => prev.filter((n) => n.id !== id))
+  }
+
+  async function handleProfileSave(updates: { display_name: string; avatar_color: string }) {
+    await supabase.from('profiles').update(updates).eq('id', currentUser.id)
+    setOwnProfile((prev) => ({ ...prev, ...updates }))
+    // Update own avatar in coffee break list if present
+    setCoffeeBreakUsers((prev) =>
+      prev.map((u) => u.id === currentUser.id ? { ...u, ...updates } : u)
+    )
+  }
+
+  function openProfile() {
+    fetchTasksDone()
+    setProfileOpen(true)
+  }
 
   return (
-    <div ref={containerRef} tabIndex={0} className="outline-none">
+    <div className="relative">
       {/* Room — warm golden-green library, top-down view */}
       <div
         className="relative rounded-3xl p-6 w-fit mx-auto shadow-xl"
         style={{ background: 'linear-gradient(160deg, #d8e8c2 0%, #c9d9a8 100%)', border: '3px solid #b5c98a' }}
       >
-        {/* Room label */}
-        <div className="text-center mb-4">
+        {/* Room label + own name clickable */}
+        <div className="text-center mb-4 flex items-center justify-center gap-2">
           <span className="text-xs font-bold tracking-widest uppercase text-[#7a9a50]/80">✨ Study Hall ✨</span>
+          <button
+            onClick={openProfile}
+            className="text-xs font-bold text-[#4a3728]/60 hover:text-[#4a3728] transition-colors underline-offset-2 hover:underline"
+          >
+            {ownProfile.display_name}
+          </button>
         </div>
 
         {/* Top row of seats */}
         <div className="flex gap-4 mb-4 justify-center">
-          {seats.slice(0, 4).map((seat, i) => (
-            <Seat key={seat.id} seatId={seat.id} occupant={seat.profiles}
-              isFocused={focusedIndex === i} isOwnSeat={seat.id === ownSeatId} />
+          {seats.slice(0, 4).map((seat) => (
+            <Seat
+              key={seat.id}
+              seatId={seat.id}
+              occupant={seat.profiles}
+              isOwnSeat={seat.id === ownSeatId}
+              onClick={() => handleSeatClick(seat)}
+            />
           ))}
         </div>
 
@@ -153,7 +252,6 @@ export default function StudyRoom({ currentUser, initialSeats }: StudyRoomProps)
             className="rounded-2xl flex items-center justify-center gap-4 px-8 py-3 shadow-md"
             style={{ background: '#c4a46b', border: '2px solid #a8883a', width: 340, height: 64 }}
           >
-            {/* Books & candle decorations */}
             <span className="text-lg">📚</span>
             <span className="text-base">🕯️</span>
             <span className="text-lg">📖</span>
@@ -164,9 +262,14 @@ export default function StudyRoom({ currentUser, initialSeats }: StudyRoomProps)
 
         {/* Bottom row of seats */}
         <div className="flex gap-4 mt-4 justify-center">
-          {seats.slice(4, 8).map((seat, i) => (
-            <Seat key={seat.id} seatId={seat.id} occupant={seat.profiles}
-              isFocused={focusedIndex === i + 4} isOwnSeat={seat.id === ownSeatId} />
+          {seats.slice(4, 8).map((seat) => (
+            <Seat
+              key={seat.id}
+              seatId={seat.id}
+              occupant={seat.profiles}
+              isOwnSeat={seat.id === ownSeatId}
+              onClick={() => handleSeatClick(seat)}
+            />
           ))}
         </div>
 
@@ -174,11 +277,53 @@ export default function StudyRoom({ currentUser, initialSeats }: StudyRoomProps)
         <div className="flex justify-between mt-4 px-2 opacity-40 text-lg">
           <span>🌿</span><span>⭐</span><span>🍄</span><span>⭐</span><span>🌿</span>
         </div>
+
+        {/* Coffee Break area */}
+        <CoffeeBreakArea
+          users={ownInCoffeeBreak
+            ? coffeeBreakUsers.some((u) => u.id === currentUser.id)
+              ? coffeeBreakUsers
+              : [...coffeeBreakUsers, { id: currentUser.id, display_name: ownProfile.display_name, avatar_color: ownProfile.avatar_color }]
+            : coffeeBreakUsers
+          }
+          onBreakClick={goToCoffeeBreak}
+          onUserClick={(user) => {
+            if (user.id !== currentUser.id) setMessageTarget(user)
+          }}
+        />
       </div>
 
-      <p className="text-center text-xs text-[#7a9a50]/70 mt-3 font-semibold tracking-wide">
-        ↑ ↓ ← → to move &nbsp;·&nbsp; enter/space to sit
-      </p>
+      {/* Message popup */}
+      {messageTarget && (
+        <MessagePopup
+          recipientName={messageTarget.display_name}
+          onSend={sendMessage}
+          onClose={() => setMessageTarget(null)}
+        />
+      )}
+
+      {/* Notification stack */}
+      <div className="fixed bottom-4 right-4 flex flex-col-reverse gap-2 z-50">
+        {notifications.map((n) => (
+          <MessageNotification
+            key={n.id}
+            id={n.id}
+            senderName={n.senderName}
+            text={n.text}
+            onDismiss={dismissNotification}
+          />
+        ))}
+      </div>
+
+      {/* Profile modal */}
+      {profileOpen && (
+        <ProfileModal
+          profile={ownProfile}
+          tasksDoneCount={tasksDoneCount}
+          onClose={() => setProfileOpen(false)}
+          onSave={handleProfileSave}
+        />
+      )}
     </div>
   )
 }
