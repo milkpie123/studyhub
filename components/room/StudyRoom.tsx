@@ -186,13 +186,11 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
   async function sendMessage(text: string) {
     if (!messageTarget || !dmChannelRef.current) return
     const msgId = crypto.randomUUID()
-    // Persist to DB for record-keeping
     await supabase.from('messages').insert({
       sender_id: currentUser.id,
       recipient_id: messageTarget.id,
       text,
     })
-    // Broadcast for instant delivery — no Supabase Realtime publication required
     dmChannelRef.current.send({
       type: 'broadcast',
       event: 'dm',
@@ -203,6 +201,10 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
         text,
       },
     })
+    // Show sender confirmation — auto-dismissed after 2s
+    const sentId = `sent-${msgId}`
+    setNotifications((prev) => [{ id: sentId, senderName: '', text: `message sent to ${messageTarget.display_name} ✨` }, ...prev].slice(0, 3))
+    setTimeout(() => dismissNotification(sentId), 2000)
   }
 
   function dismissNotification(id: string) {

@@ -28,7 +28,7 @@ export default function MessageNotification({ id, senderName, text, onDismiss }:
   return (
     <div className="bg-white rounded-2xl shadow-lg border border-[#e8dfc8] px-4 py-3 w-64 flex items-start gap-3">
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-bold text-[#4a3728] mb-0.5">{senderName}</p>
+        {senderName && <p className="text-xs font-bold text-[#4a3728] mb-0.5">{senderName}</p>}
         <p className="text-sm text-[#7a6650]">{text}</p>
       </div>
       <button
