@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import Seat, { type Profile } from './Seat'
 import CoffeeBreakArea from './CoffeeBreakArea'
@@ -62,14 +62,16 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
 
   const supabase = createClient()
   const ownSeatId = seats.find((s) => s.occupied_by === currentUser.id)?.id ?? null
+  // Holds the subscribed broadcast channel so sendMessage can call .send() on it
+  const dmChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
 
-  // Fetch tasks done count for profile modal
+  // Fetch tasks done count for profile modal (column is `checked`, not `done`)
   const fetchTasksDone = useCallback(async () => {
     const { count } = await supabase
       .from('tasks')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', currentUser.id)
-      .eq('done', true)
+      .eq('checked', true)
     setTasksDoneCount(count ?? 0)
   }, [supabase, currentUser.id])
 
@@ -126,34 +128,22 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
       )
       .subscribe()
 
-    const messagesChannel = supabase
-      .channel('messages-inbox')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `recipient_id=eq.${currentUser.id}` },
-        async (payload) => {
-          const msg = payload.new as { id: string; sender_id: string; text: string }
-          // Look up sender name from local state first, fallback to fetch
-          const inSeat = seats.find((s) => s.occupied_by === msg.sender_id)?.profiles
-          const inCoffeeBreak = coffeeBreakUsers.find((u) => u.id === msg.sender_id)
-          let senderName: string = inSeat?.display_name ?? inCoffeeBreak?.display_name ?? ''
-          if (!senderName) {
-            const { data } = await supabase.from('profiles').select('display_name').eq('id', msg.sender_id).single()
-            senderName = data?.display_name ?? 'Someone'
-          }
-          setNotifications((prev) => {
-            const newNotif = { id: msg.id, senderName, text: msg.text }
-            const updated = [newNotif, ...prev]
-            return updated.slice(0, 3)
-          })
-        }
-      )
+    // Broadcast channel for direct messages — no Supabase publication config needed
+    const dmChannel = supabase
+      .channel('room-dm')
+      .on('broadcast', { event: 'dm' }, (payload: { payload: { id: string; recipientId: string; senderName: string; text: string } }) => {
+        const { id, recipientId, senderName, text } = payload.payload
+        if (recipientId !== currentUser.id) return
+        setNotifications((prev) => [{ id, senderName, text }, ...prev].slice(0, 3))
+      })
       .subscribe()
+    dmChannelRef.current = dmChannel
 
     return () => {
       supabase.removeChannel(seatsChannel)
       supabase.removeChannel(profilesChannel)
-      supabase.removeChannel(messagesChannel)
+      supabase.removeChannel(dmChannel)
+      dmChannelRef.current = null
     }
   }, [supabase, currentUser.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -194,11 +184,24 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
   }
 
   async function sendMessage(text: string) {
-    if (!messageTarget) return
+    if (!messageTarget || !dmChannelRef.current) return
+    const msgId = crypto.randomUUID()
+    // Persist to DB for record-keeping
     await supabase.from('messages').insert({
       sender_id: currentUser.id,
       recipient_id: messageTarget.id,
       text,
+    })
+    // Broadcast for instant delivery — no Supabase Realtime publication required
+    dmChannelRef.current.send({
+      type: 'broadcast',
+      event: 'dm',
+      payload: {
+        id: msgId,
+        recipientId: messageTarget.id,
+        senderName: ownProfile.display_name,
+        text,
+      },
     })
   }
 

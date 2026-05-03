@@ -22,10 +22,17 @@ export default function TaskPanel({ userId }: TaskPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    // Only show tasks created today (local timezone) — natural daily reset
+    const now = new Date()
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
+
     supabase
       .from('tasks')
       .select('id, text, checked, created_at')
       .eq('user_id', userId)
+      .gte('created_at', startOfDay)
+      .lt('created_at', endOfDay)
       .order('created_at')
       .then(({ data }) => {
         setTasks(data ?? [])
