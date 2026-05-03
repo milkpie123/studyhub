@@ -159,10 +159,15 @@ export default function StudyRoom({ currentUser, initialSeats, initialCoffeeBrea
 
   // Claim a seat
   async function claimSeat(seatId: number) {
-    // Optimistically release coffee break
+    // Release current seat first (occupied_by has a UNIQUE constraint)
+    if (ownSeatId !== null) {
+      await supabase.from('seats').update({ occupied_by: null, occupied_at: null }).eq('id', ownSeatId)
+    }
+    // Clear coffee break
     setOwnInCoffeeBreak(false)
     await supabase.from('profiles').update({ in_coffee_break: false }).eq('id', currentUser.id)
-    await supabase.from('seats').upsert({ id: seatId, occupied_by: currentUser.id, occupied_at: new Date().toISOString() })
+    // Claim new seat (all 8 rows always exist, so update is safe)
+    await supabase.from('seats').update({ occupied_by: currentUser.id, occupied_at: new Date().toISOString() }).eq('id', seatId)
   }
 
   // Move to coffee break
