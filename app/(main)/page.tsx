@@ -9,13 +9,16 @@ export default async function RoomPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: profile } = await supabase
+  const { data: profileRow } = await supabase
     .from('profiles')
-    .select('id, display_name, username, avatar_color, in_coffee_break, created_at')
+    .select('id, display_name, username, avatar_color, in_coffee_break')
     .eq('id', user.id)
     .single()
 
-  if (!profile) redirect('/login')
+  if (!profileRow) redirect('/login')
+
+  // Attach auth user's created_at so ProfileModal can compute days-on-site
+  const profile = { ...profileRow, created_at: user.created_at }
 
   const { data: rawSeats } = await supabase
     .from('seats')
